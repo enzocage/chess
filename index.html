@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategische Schach-KI</title>
+    <!-- Importiere chess.js für die Regel-Validierung (Zug-Generierung) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --board-light: #e0e0e0;
+            --board-dark: #4a7a9f; /* Strategisches Blau */
+            --highlight: rgba(255, 255, 0, 0.5);
+            --last-move: rgba(155, 255, 0, 0.4);
+            --text-color: #f0f0f0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden; /* Verhindert Scrollen beim Draggen auf Mobile */
+        }
+
+        h1 { margin-bottom: 10px; font-size: 1.5rem; }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        #status {
+            font-size: 1.2rem;
+            font-weight: bold;
+            height: 30px;
+            color: #ffcc00;
+        }
+
+        /* Das Schachbrett */
+        #board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            width: 90vw;
+            height: 90vw;
+            max-width: 600px;
+            max-height: 600px;
+            border: 5px solid #333;
+            user-select: none;
+            position: relative;
+        }
+
+        .square {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        .square.light { background-color: var(--board-light); }
+        .square.dark { background-color: var(--board-dark); }
+        
+        .square.highlight { background-color: var(--highlight) !important; }
+        .square.last-move { position: relative; }
+        .square.last-move::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: var(--last-move);
+            pointer-events: none;
+        }
+
+        /* Figuren Styles */
+        .piece {
+            width: 90%;
+            height: 90%;
+            cursor: grab;
+            z-index: 10;
+            transition: transform 0.1s;
+        }
+        
+        .piece.dragging {
+            cursor: grabbing;
+            z-index: 1000;
+            pointer-events: none; /* Damit Events auf darunterliegende Felder durchgehen */
+        }
+
+        /* Controls */
+        #controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 1rem;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        button:hover { background-color: #444; }
+
+        /* AI Thinking Indicator */
+        #ai-thinking {
+            display: none;
+            font-size: 0.9rem;
+            color: #aaa;
+            margin-top: 5px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <h1>Strategische Schach-KI</h1>
+        <div id="status">Weiß am Zug</div>
+        <div id="board"></div>
+        <div id="ai-thinking">KI berechnet besten Zug...</div>
+        <div id="controls">
+            <button onclick="resetGame()">Neues Spiel</button>
+            <button onclick="undoMove()">Zug zurück</button>
+        </div>
+    </div>
+
+<script>
+    // --- 1. SVG GENERATIVE GRAFIK ---
+    // Definition der Figuren als SVG-Pfade, um externe Bilder zu vermeiden.
+    const PIECES_SVG = {
+        w: {
+            p: '<svg viewBox="0 0 45 45"><path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03-3 1.06-7.41 5.55-7.41 13.47h23c0-7.92-4.41-12.41-7.41-13.47 1.47-1.19 2.41-3 2.41-5.03 0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z" fill="#fff" stroke="#000" stroke-width="1.5"/></svg>',
+            r: '<svg viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 39h27v-3H9v3zM12 36v-4h21v4H12zM11 14V9h4v2h5V9h5v2h5V9h4v5" stroke-linecap="butt"/><path d="M34 14l-3 3H14l-3-3"/><path d="M31 17v12.5H14V17" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M31 29.5l1.5 2.5h-20l1.5-2.5"/><path d="M11 14h23" fill="none" stroke-linejoin="miter"/></g></svg>',
+            n: '<svg viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21"/><path d="M24 18c.38 2.32-4.68 1.97-5 4 4.55 5.2 7.21 6.95 8.5 7.12.5-1.5-1-3-1.87-4.14-.87-1.13-1.7-2.32-2.63-3.98-.93-1.65-2.5-2-4-2z" fill="#000"/><path d="M9.5 25.5A23 23 0 0 1 15 29H9.5a7 7 0 0 0 0-3.5z"/><path d="M15 15.5c-4.55 1.5-6.5 4.5-7 8.5"/><path d="M9.5 25.5A7 7 0 0 1 6 22l3.5 3.5z"/></g></svg>',
+            b: '<svg viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#fff" stroke="#000" stroke-linecap="butt"><path d="M9 36c3.39-.47 12.42-4.18 19.98 2.56L28 36H9z"/><path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/><path d="M25 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0z"/></g><path d="M17.5 26h10M15 30h15m-7.5-14.5v5M20 18h5" stroke-linejoin="miter"/></g></svg>',
+            q: '<svg viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM24.5 7.5a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM41 12a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM10.5 20a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM38.5 20a2 2 0 1 1-4 0 2 2 0 1 1 4 0z"/><path d="M9 26c8.5-1.5 21-1.5 27 0l2-12-7 11V11l-5.5 13.5-3-15-3 15-5.5-13.5V25L7 14l2 12z"/><path d="M9 26c0 2 1.5 2 2.5 4 1 2.5 3 1 5 2.5a10.2 10.2 0 0 1 11.77 0c2-1.5 4 0 5-2.5 1-2 2.5-2 2.5-4H9z"/><path d="M11.5 30c3.5-1 18.5-1 22 0M12 33.5c6-1 15-1 21 0"/></g></svg>',
+            k: '<svg viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 11.63V6M20 8h5"/><path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5"/><path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-1-5 2-8 2s-4-4-7.5-4-7.5 4-7.5 4-4-3-8-2c-3 6 6 10.5 6 10.5v7z"/><path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0"/></g></svg>'
+        },
+        b: {
+            p: '<svg viewBox="0 0 45 45"><path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03-3 1.06-7.41 5.55-7.41 13.47h23c0-7.92-4.41-12.41-7.41-13.47 1.47-1.19 2.41-3 2.41-5.03 0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z" fill="#000" stroke="#fff" stroke-width="1.5"/></svg>',
+            r: '<svg viewBox="0 0 45 45"><g fill="#000" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 39h27v-3H9v3zM12 36v-4h21v4H12zM11 14V9h4v2h5V9h5v2h5V9h4v5" stroke-linecap="butt"/><path d="M34 14l-3 3H14l-3-3"/><path d="M31 17v12.5H14V17" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M31 29.5l1.5 2.5h-20l1.5-2.5"/><path d="M11 14h23" fill="none" stroke-linejoin="miter"/></g></svg>',
+            n: '<svg viewBox="0 0 45 45"><g fill="#000" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21"/><path d="M24 18c.38 2.32-4.68 1.97-5 4 4.55 5.2 7.21 6.95 8.5 7.12.5-1.5-1-3-1.87-4.14-.87-1.13-1.7-2.32-2.63-3.98-.93-1.65-2.5-2-4-2z" fill="#fff"/><path d="M9.5 25.5A23 23 0 0 1 15 29H9.5a7 7 0 0 0 0-3.5z"/><path d="M15 15.5c-4.55 1.5-6.5 4.5-7 8.5"/><path d="M9.5 25.5A7 7 0 0 1 6 22l3.5 3.5z"/></g></svg>',
+            b: '<svg viewBox="0 0 45 45"><g fill="#000" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#000" stroke="#fff" stroke-linecap="butt"><path d="M9 36c3.39-.47 12.42-4.18 19.98 2.56L28 36H9z"/><path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/><path d="M25 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0z"/></g><path d="M17.5 26h10M15 30h15m-7.5-14.5v5M20 18h5" stroke-linejoin="miter"/></g></svg>',
+            q: '<svg viewBox="0 0 45 45"><g fill="#000" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM24.5 7.5a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM41 12a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM10.5 20a2 2 0 1 1-4 0 2 2 0 1 1 4 0zM38.5 20a2 2 0 1 1-4 0 2 2 0 1 1 4 0z"/><path d="M9 26c8.5-1.5 21-1.5 27 0l2-12-7 11V11l-5.5 13.5-3-15-3 15-5.5-13.5V25L7 14l2 12z"/><path d="M9 26c0 2 1.5 2 2.5 4 1 2.5 3 1 5 2.5a10.2 10.2 0 0 1 11.77 0c2-1.5 4 0 5-2.5 1-2 2.5-2 2.5-4H9z"/><path d="M11.5 30c3.5-1 18.5-1 22 0M12 33.5c6-1 15-1 21 0"/></g></svg>',
+            k: '<svg viewBox="0 0 45 45"><g fill="#000" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 11.63V6M20 8h5"/><path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5"/><path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-1-5 2-8 2s-4-4-7.5-4-7.5 4-7.5 4-4-3-8-2c-3 6 6 10.5 6 10.5v7z"/><path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0"/></g></svg>'
+        }
+    };
+
+    // --- 2. SCHACHLOGIK & SETUP ---
+    
+    // Initialisierung von chess.js
+    const game = new Chess();
+    const boardEl = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const aiThinkingEl = document.getElementById('ai-thinking');
+    
+    let draggedPiece = null;
+    let startSquare = null;
+    let possibleMoves = [];
+    let playerColor = 'w'; // Mensch spielt Weiß
+
+    // --- 3. KI - MATHEMATISCHE ALGORITHMEN (EVALUATION & SEARCH) ---
+
+    // Priorisierte Regeln in Zahlen transformiert:
+    const PIECE_VALUES = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+    
+    // Piece Square Tables (PST) - Implementiert Regel 2 (Zentrum) und 13 (Stützpunkte)
+    // Werte für Weiß (für Schwarz gespiegelt)
+    const PST = {
+        p: [ // Bauern: Belohnung für Fortschritt und Zentrum
+             0,  0,  0,  0,  0,  0,  0,  0,
+            50, 50, 50, 50, 50, 50, 50, 50, // Freibauern Potenzial
+            10, 10, 20, 30, 30, 20, 10, 10,
+             5,  5, 10, 25, 25, 10,  5,  5, // Zentrum
+             0,  0,  0, 20, 20,  0,  0,  0,
+             5, -5,-10,  0,  0,-10, -5,  5,
+             5, 10, 10,-20,-20, 10, 10,  5,
+             0,  0,  0,  0,  0,  0,  0,  0
+        ],
+        n: [ // Springer: Meidet Rand, liebt Zentrum (Regel 7 & 13)
+            -50,-40,-30,-30,-30,-30,-40,-50,
+            -40,-20,  0,  0,  0,  0,-20,-40,
+            -30,  0, 10, 15, 15, 10,  0,-30,
+            -30,  5, 15, 20, 20, 15,  5,-30, // Zentralisiert
+            -30,  0, 15, 20, 20, 15,  0,-30,
+            -30,  5, 10, 15, 15, 10,  5,-30,
+            -40,-20,  0,  5,  5,  0,-20,-40,
+            -50,-40,-30,-30,-30,-30,-40,-50
+        ],
+        b: [ // Läufer: Gute Diagonalen, meidet Ecken
+            -20,-10,-10,-10,-10,-10,-10,-20,
+            -10,  0,  0,  0,  0,  0,  0,-10,
+            -10,  0,  5, 10, 10,  5,  0,-10,
+            -10,  5,  5, 10, 10,  5,  5,-10,
+            -10,  0, 10, 10, 10, 10,  0,-10,
+            -10, 10, 10, 10, 10, 10, 10,-10,
+            -10,  5,  0,  0,  0,  0,  5,-10,
+            -20,-10,-10,-10,-10,-10,-10,-20
+        ],
+        r: [ // Türme: Offene Linien, 7. Reihe (Regel 12)
+             0,  0,  0,  0,  0,  0,  0,  0,
+             5, 10, 10, 10, 10, 10, 10,  5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+             0,  0,  0,  5,  5,  0,  0,  0
+        ],
+        q: [ // Dame: Dominanz, aber nicht zu früh raus (Regel 8)
+            -20,-10,-10, -5, -5,-10,-10,-20,
+            -10,  0,  0,  0,  0,  0,  0,-10,
+            -10,  0,  5,  5,  5,  5,  0,-10,
+             -5,  0,  5,  5,  5,  5,  0, -5,
+              0,  0,  5,  5,  5,  5,  0, -5,
+            -10,  5,  5,  5,  5,  5,  0,-10,
+            -10,  0,  5,  0,  0,  0,  0,-10,
+            -20,-10,-10, -5, -5,-10,-10,-20
+        ],
+        k: [ // König (Mittelspiel): Sicherheit in der Burg (Regel 1)
+            -30,-40,-40,-50,-50,-40,-40,-30,
+            -30,-40,-40,-50,-50,-40,-40,-30,
+            -30,-40,-40,-50,-50,-40,-40,-30,
+            -30,-40,-40,-50,-50,-40,-40,-30,
+            -20,-30,-30,-40,-40,-30,-30,-20,
+            -10,-20,-20,-20,-20,-20,-20,-10,
+             20, 20,  0,  0,  0,  0, 20, 20, // Rochade Positionen
+             20, 30, 10,  0,  0, 10, 30, 20
+        ]
+    };
+
+    // Endspiel PST für König (Zentralisierung - Regel 26)
+    const PST_K_END = [
+        -50,-40,-30,-20,-20,-30,-40,-50,
+        -30,-20,-10,  0,  0,-10,-20,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-30,  0,  0,  0,  0,-30,-30,
+        -50,-30,-30,-30,-30,-30,-30,-50
+    ];
+
+    function evaluateBoard(fen) {
+        const tempGame = new Chess(fen);
+        let totalEvaluation = 0;
+        
+        // 1. Material & Position
+        const board = tempGame.board();
+        
+        // Sind wir im Endspiel? (Keine Damen oder wenig Material)
+        let isEndgame = !fen.includes('q') && !fen.includes('Q'); 
+
+        for (let i = 0; i < 8; i++) {
+            for (let j = 0; j < 8; j++) {
+                const piece = board[i][j];
+                if (piece) {
+                    // Basiswert (Regel 3: Material)
+                    let value = PIECE_VALUES[piece.type];
+                    
+                    // Positionsbonus (Regel 2: Zentrum, etc.)
+                    // Index für PST berechnen (PST sind flat Arrays 0-63)
+                    // Für Schwarz müssen wir den Index spiegeln
+                    let pstIndex = i * 8 + j;
+                    let pstValue = 0;
+
+                    if (piece.color === 'w') {
+                        if (piece.type === 'k' && isEndgame) {
+                             pstValue = PST_K_END[pstIndex];
+                        } else {
+                             pstValue = PST[piece.type][pstIndex];
+                        }
+                        totalEvaluation += (value + pstValue);
+                    } else {
+                        // Spiegelung für Schwarz
+                        let mirrorIndex = (7 - i) * 8 + j; 
+                        if (piece.type === 'k' && isEndgame) {
+                             pstValue = PST_K_END[mirrorIndex];
+                        } else {
+                             pstValue = PST[piece.type][mirrorIndex];
+                        }
+                        totalEvaluation -= (value + pstValue);
+                    }
+                }
+            }
+        }
+        return totalEvaluation;
+    }
+
+    // Minimax mit Alpha-Beta Pruning
+    function minimax(depth, gameObj, alpha, beta, isMaximizing) {
+        if (depth === 0 || gameObj.game_over()) {
+            return evaluateBoard(gameObj.fen());
+        }
+
+        const moves = gameObj.moves();
+        
+        // Regel 11: Mobilität (Bonus für viele Züge) - leichte Gewichtung
+        // Wird implizit durch Alpha-Beta sortierung verbessert, hier einfach gehalten
+
+        if (isMaximizing) {
+            let maxEval = -Infinity;
+            for (let i = 0; i < moves.length; i++) {
+                gameObj.move(moves[i]);
+                let eval = minimax(depth - 1, gameObj, alpha, beta, false);
+                gameObj.undo();
+                maxEval = Math.max(maxEval, eval);
+                alpha = Math.max(alpha, eval);
+                if (beta <= alpha) break; // Pruning
+            }
+            return maxEval;
+        } else {
+            let minEval = Infinity;
+            for (let i = 0; i < moves.length; i++) {
+                gameObj.move(moves[i]);
+                let eval = minimax(depth - 1, gameObj, alpha, beta, true);
+                gameObj.undo();
+                minEval = Math.min(minEval, eval);
+                beta = Math.min(beta, eval);
+                if (beta <= alpha) break; // Pruning
+            }
+            return minEval;
+        }
+    }
+
+    function makeBestMove() {
+        const moves = game.moves();
+        if (game.game_over() || moves.length === 0) return;
+
+        aiThinkingEl.style.display = 'block';
+
+        // Verzögerung, damit UI rendern kann und es menschlicher wirkt
+        setTimeout(() => {
+            let bestMove = null;
+            let bestValue = Infinity; // KI ist Schwarz (minimizing player)
+            let alpha = -Infinity;
+            let beta = Infinity;
+            
+            // Tiefe 3 für Balance aus Geschwindigkeit und Stärke
+            const depth = 3; 
+
+            // Shuffle Moves für Varianz bei gleichen Bewertungen
+            moves.sort(() => Math.random() - 0.5);
+
+            for (let i = 0; i < moves.length; i++) {
+                game.move(moves[i]);
+                // Hier sucht Weiß (Maximizer) die Antwort
+                let boardValue = minimax(depth - 1, game, alpha, beta, true);
+                game.undo();
+                
+                if (boardValue < bestValue) {
+                    bestValue = boardValue;
+                    bestMove = moves[i];
+                }
+                beta = Math.min(beta, bestValue);
+            }
+
+            if (bestMove) {
+                game.move(bestMove);
+                renderBoard();
+                checkStatus();
+                playAudio('move');
+            }
+            aiThinkingEl.style.display = 'none';
+        }, 100);
+    }
+
+
+    // --- 4. BOARD RENDERING & INTERACTION ---
+
+    function createBoard() {
+        boardEl.innerHTML = '';
+        const boardState = game.board();
+        
+        for (let i = 0; i < 8; i++) {
+            for (let j = 0; j < 8; j++) {
+                const square = document.createElement('div');
+                square.className = `square ${(i + j) % 2 === 0 ? 'light' : 'dark'}`;
+                square.dataset.square = String.fromCharCode(97 + j) + (8 - i);
+                
+                const pieceInfo = boardState[i][j];
+                if (pieceInfo) {
+                    const piece = document.createElement('div');
+                    piece.className = 'piece';
+                    piece.innerHTML = PIECES_SVG[pieceInfo.color][pieceInfo.type];
+                    piece.draggable = true;
+                    // Daten für Event Handler
+                    piece.dataset.square = square.dataset.square; 
+                    piece.dataset.color = pieceInfo.color;
+                    square.appendChild(piece);
+                }
+
+                // Drag & Drop Events
+                square.addEventListener('dragover', handleDragOver);
+                square.addEventListener('drop', handleDrop);
+                square.addEventListener('mousedown', handleMouseDown); // Fallback / Start Drag
+
+                // Highlight Last Move
+                const history = game.history({ verbose: true });
+                if (history.length > 0) {
+                    const last = history[history.length - 1];
+                    if (square.dataset.square === last.from || square.dataset.square === last.to) {
+                        square.classList.add('last-move');
+                    }
+                }
+
+                boardEl.appendChild(square);
+            }
+        }
+        
+        // Touch Support für Mobile
+        setupTouchEvents();
+    }
+
+    // Drag & Drop Logic
+    function handleMouseDown(e) {
+        const piece = e.target.closest('.piece');
+        if (!piece) return;
+        if (piece.dataset.color !== 'w' && game.turn() === 'w') return; // Nur eigene Figuren (Weiß) bewegen
+        
+        startSquare = piece.dataset.square;
+        draggedPiece = piece;
+    }
+
+    // Standard HTML5 Drag API Handlers
+    document.addEventListener('dragstart', (e) => {
+        if (!e.target.closest('.piece')) { e.preventDefault(); return; }
+        draggedPiece = e.target.closest('.piece');
+        startSquare = draggedPiece.dataset.square;
+        
+        // Verhindern, dass KI Figuren bewegt werden
+        if (game.turn() === 'b') { e.preventDefault(); return; }
+
+        setTimeout(() => draggedPiece.classList.add('dragging'), 0);
+        
+        // Mögliche Züge highlighten
+        highlightMoves(startSquare);
+    });
+
+    document.addEventListener('dragend', (e) => {
+        if (draggedPiece) draggedPiece.classList.remove('dragging');
+        clearHighlights();
+        draggedPiece = null;
+    });
+
+    function handleDragOver(e) {
+        e.preventDefault(); // Nötig für Drop
+    }
+
+    function handleDrop(e) {
+        e.preventDefault();
+        const targetSquare = e.target.closest('.square');
+        if (!targetSquare || !startSquare) return;
+
+        const move = {
+            from: startSquare,
+            to: targetSquare.dataset.square,
+            promotion: 'q' // Immer Dame bei Umwandlung der Einfachheit halber
+        };
+
+        attemptMove(move);
+    }
+
+    // Mobile Touch Logic (Simuliertes Drag & Drop)
+    let touchStartX, touchStartY, touchPiece;
+
+    function setupTouchEvents() {
+        const pieces = document.querySelectorAll('.piece');
+        pieces.forEach(p => {
+            p.addEventListener('touchstart', (e) => {
+                if (game.turn() !== 'w' || p.dataset.color !== 'w') return;
+                e.preventDefault(); // Scroll verhindern
+                touchPiece = p;
+                startSquare = p.dataset.square;
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+                p.style.position = 'fixed';
+                p.style.zIndex = 1000;
+                movePieceToTouch(e.touches[0]);
+                highlightMoves(startSquare);
+            }, {passive: false});
+
+            p.addEventListener('touchmove', (e) => {
+                if (!touchPiece) return;
+                e.preventDefault();
+                movePieceToTouch(e.touches[0]);
+            }, {passive: false});
+
+            p.addEventListener('touchend', (e) => {
+                if (!touchPiece) return;
+                
+                // Element unter dem Finger finden
+                const touch = e.changedTouches[0];
+                touchPiece.style.position = '';
+                touchPiece.style.zIndex = '';
+                touchPiece.style.left = '';
+                touchPiece.style.top = '';
+                
+                // Trick: Das Piece kurz ausblenden um das Element darunter zu finden
+                touchPiece.hidden = true;
+                let elemBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+                touchPiece.hidden = false;
+
+                let targetSquare = elemBelow ? elemBelow.closest('.square') : null;
+                
+                clearHighlights();
+
+                if (targetSquare && startSquare) {
+                    attemptMove({
+                        from: startSquare,
+                        to: targetSquare.dataset.square,
+                        promotion: 'q'
+                    });
+                }
+                touchPiece = null;
+            });
+        });
+    }
+
+    function movePieceToTouch(touch) {
+        if(touchPiece) {
+            touchPiece.style.left = (touch.clientX - touchPiece.offsetWidth / 2) + 'px';
+            touchPiece.style.top = (touch.clientY - touchPiece.offsetHeight / 2) + 'px';
+        }
+    }
+
+    // --- GAME FLOW ---
+
+    function attemptMove(moveObj) {
+        try {
+            const result = game.move(moveObj);
+            if (result) {
+                renderBoard();
+                checkStatus();
+                playAudio('move');
+                
+                if (!game.game_over()) {
+                    // KI Zug auslösen
+                    makeBestMove();
+                }
+            }
+        } catch (e) {
+            // Ungültiger Zug
+            renderBoard(); // Reset visuals
+        }
+    }
+
+    function highlightMoves(square) {
+        const moves = game.moves({ square: square, verbose: true });
+        moves.forEach(move => {
+            const el = document.querySelector(`.square[data-square="${move.to}"]`);
+            if (el) el.classList.add('highlight');
+        });
+    }
+
+    function clearHighlights() {
+        document.querySelectorAll('.square').forEach(sq => sq.classList.remove('highlight'));
+    }
+
+    function renderBoard() {
+        createBoard();
+    }
+
+    function checkStatus() {
+        if (game.in_checkmate()) {
+            statusEl.innerText = game.turn() === 'w' ? "Schwarz gewinnt durch Matt!" : "Weiß gewinnt durch Matt!";
+            statusEl.style.color = "#ff4444";
+        } else if (game.in_draw()) {
+            statusEl.innerText = "Remis!";
+        } else if (game.in_check()) {
+            statusEl.innerText = "Schach!";
+        } else {
+            statusEl.innerText = game.turn() === 'w' ? "Dein Zug (Weiß)" : "Computer denkt...";
+        }
+    }
+
+    function undoMove() {
+        game.undo(); // Rückgängig KI
+        game.undo(); // Rückgängig Spieler
+        renderBoard();
+        checkStatus();
+    }
+
+    function resetGame() {
+        game.reset();
+        renderBoard();
+        checkStatus();
+    }
+    
+    // Simple Audio Synthese für Sound-Effekt
+    function playAudio(type) {
+        // Optional: Kurzer Beep via Web Audio API, falls gewünscht.
+        // Hier der Einfachheit halber weggelassen, um Code kompakt zu halten.
+    }
+
+    // Start
+    renderBoard();
+
+</script>
+</body>
+</html>
